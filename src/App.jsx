@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from 'react';
-import { ShoppingCart, Search, Home, User, Lightbulb } from 'lucide-react'; // Added Lightbulb icon for recipe ideas
-import './App.css'; // Importing CSS for global styles
+import React, { useState, useEffect, useRef } from 'react';
+import { ShoppingCart, Search, Home, User, Lightbulb, MessageSquare, Mic, Send, X } from 'lucide-react'; // Added MessageSquare, Mic, Send, X icons
+import './App.css'; // Importing CSS for styling
 // Dummy data for food items
 const initialFoodItems = [
   {
@@ -68,6 +68,24 @@ function App() {
   const [recipeSuggestions, setRecipeSuggestions] = useState('');
   // State for loading indicator during API call
   const [isLoadingRecipes, setIsLoadingRecipes] = useState(false);
+  // State for chatbot visibility
+  const [isChatbotOpen, setIsChatbotOpen] = useState(false);
+  // State for chatbot messages
+  const [chatMessages, setChatMessages] = useState([]);
+  // State for chatbot input text
+  const [chatInputText, setChatInputText] = useState('');
+  // State for chatbot voice listening
+  const [isListening, setIsListening] = useState(false);
+  // State for chatbot bot typing indicator
+  const [isBotTyping, setIsBotTyping] = useState(false);
+
+  // Ref for scrolling chat messages
+  const messagesEndRef = useRef(null);
+
+  // Scroll to bottom of chat messages when new message arrives
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [chatMessages]);
 
   // Effect to filter food items based on search query
   useEffect(() => {
@@ -165,6 +183,95 @@ function App() {
     }
   };
 
+  // Chatbot functions
+  const handleChatInputChange = (e) => {
+    setChatInputText(e.target.value);
+  };
+
+  const sendChatMessage = async (message) => {
+    if (!message.trim()) return;
+
+    const newUserMessage = { text: message, sender: 'user' };
+    setChatMessages(prevMessages => [...prevMessages, newUserMessage]);
+    setChatInputText('');
+    setIsBotTyping(true);
+
+    try {
+      let chatHistory = chatMessages.map(msg => ({
+        role: msg.sender === 'user' ? 'user' : 'model',
+        parts: [{ text: msg.text }]
+      }));
+      chatHistory.push({ role: "user", parts: [{ text: message }] });
+
+      const payload = { contents: chatHistory };
+      const apiKey = "";
+      const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
+
+      const response = await fetch(apiUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+
+      const result = await response.json();
+
+      if (result.candidates && result.candidates.length > 0 &&
+          result.candidates[0].content && result.candidates[0].content.parts &&
+          result.candidates[0].content.parts.length > 0) {
+        const botResponse = result.candidates[0].content.parts[0].text;
+        setChatMessages(prevMessages => [...prevMessages, { text: botResponse, sender: 'bot' }]);
+      } else {
+        setChatMessages(prevMessages => [...prevMessages, { text: "I'm having trouble understanding. Can you rephrase?", sender: 'bot' }]);
+      }
+    } catch (error) {
+      console.error("Error sending message to Gemini:", error);
+      setChatMessages(prevMessages => [...prevMessages, { text: "Oops! Something went wrong. Please try again.", sender: 'bot' }]);
+    } finally {
+      setIsBotTyping(false);
+    }
+  };
+
+  const startVoiceInput = () => {
+    if (!('webkitSpeechRecognition' in window)) {
+      setChatMessages(prevMessages => [...prevMessages, { text: "Voice input not supported in your browser.", sender: 'bot' }]);
+      return;
+    }
+
+    const recognition = new window.webkitSpeechRecognition();
+    recognition.continuous = false;
+    recognition.interimResults = false;
+    recognition.lang = 'en-US';
+
+    recognition.onstart = () => {
+      setIsListening(true);
+      setChatMessages(prevMessages => [...prevMessages, { text: "Listening...", sender: 'bot' }]);
+    };
+
+    recognition.onresult = (event) => {
+      const transcript = event.results[0][0].transcript;
+      sendChatMessage(transcript);
+    };
+
+    recognition.onerror = (event) => {
+      console.error("Speech recognition error:", event.error);
+      setIsListening(false); // Ensure listening state is reset on error
+      // Provide more specific feedback for 'not-allowed' error
+      if (event.error === 'not-allowed') {
+        setChatMessages(prevMessages => [...prevMessages, { text: "Microphone access denied. Please enable microphone permissions for this site in your browser settings.", sender: 'bot' }]);
+      } else {
+        setChatMessages(prevMessages => [...prevMessages, { text: "Voice input error. Please try typing.", sender: 'bot' }]);
+      }
+    };
+
+    recognition.onend = () => {
+      setIsListening(false);
+      // Remove "Listening..." message if it's still there and no new message was sent
+      setChatMessages(prevMessages => prevMessages.filter(msg => msg.text !== "Listening..." || msg.sender !== 'bot'));
+    };
+
+    recognition.start();
+  };
+
 
   return (
     <div className="App">
@@ -182,6 +289,8 @@ function App() {
           --border-color: #ddd;
           --shadow-light: rgba(0, 0, 0, 0.08);
           --shadow-medium: rgba(0, 0, 0, 0.15);
+          --bot-bubble-color: #e0f7fa; /* Light blue for bot messages */
+          --user-bubble-color: #dcf8c6; /* Light green for user messages */
         }
 
         * {
@@ -661,6 +770,202 @@ function App() {
           to { transform: translateY(0); opacity: 1; }
         }
 
+        /* Chatbot Styles */
+        .chatbot-container {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            z-index: 3000;
+            display: flex;
+            flex-direction: column;
+            align-items: flex-end;
+        }
+
+        .chatbot-toggle-button {
+            background-color: var(--secondary-color);
+            color: #fff;
+            border: none;
+            border-radius: 50%;
+            width: 60px;
+            height: 60px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-size: 2rem;
+            cursor: pointer;
+            box-shadow: 0 4px 12px var(--shadow-medium);
+            transition: transform 0.3s ease, background-color 0.3s ease;
+        }
+
+        .chatbot-toggle-button:hover {
+            transform: translateY(-5px);
+            background-color: #3aa8a1;
+        }
+
+        .chatbot-toggle-button:active {
+            transform: translateY(0);
+        }
+
+        .chatbot-window {
+            background-color: #fff;
+            border-radius: 12px;
+            box-shadow: 0 8px 24px var(--shadow-medium);
+            width: 350px;
+            height: 450px;
+            display: flex;
+            flex-direction: column;
+            margin-bottom: 15px; /* Space between window and toggle button */
+            overflow: hidden;
+            animation: slideInUp 0.3s ease-out;
+            transform-origin: bottom right;
+        }
+
+        @keyframes slideInUp {
+            from { transform: scale(0.8) translateY(50px); opacity: 0; }
+            to { transform: scale(1) translateY(0); opacity: 1; }
+        }
+
+        .chat-header {
+            background-color: var(--primary-color);
+            color: #fff;
+            padding: 0.8rem 1rem;
+            border-top-left-radius: 12px;
+            border-top-right-radius: 12px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-weight: 600;
+            font-size: 1.1rem;
+        }
+
+        .chat-header .close-btn {
+            background: none;
+            border: none;
+            color: #fff;
+            font-size: 1.5rem;
+            cursor: pointer;
+        }
+
+        .chat-messages {
+            flex-grow: 1;
+            padding: 1rem;
+            overflow-y: auto;
+            background-color: var(--light-gray);
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+        }
+
+        .message-bubble {
+            max-width: 80%;
+            padding: 0.7rem 1rem;
+            border-radius: 18px;
+            line-height: 1.4;
+            word-wrap: break-word;
+        }
+
+        .message-bubble.user {
+            background-color: var(--user-bubble-color);
+            align-self: flex-end;
+            border-bottom-right-radius: 4px;
+        }
+
+        .message-bubble.bot {
+            background-color: var(--bot-bubble-color);
+            align-self: flex-start;
+            border-bottom-left-radius: 4px;
+        }
+
+        .chat-input-area {
+            display: flex;
+            padding: 0.8rem 1rem;
+            border-top: 1px solid var(--border-color);
+            background-color: #fff;
+            gap: 0.5rem;
+        }
+
+        .chat-input {
+            flex-grow: 1;
+            padding: 0.7rem 1rem;
+            border: 1px solid var(--border-color);
+            border-radius: 25px;
+            font-size: 1rem;
+            outline: none;
+        }
+
+        .chat-input-button {
+            background-color: var(--secondary-color);
+            color: #fff;
+            border: none;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            cursor: pointer;
+            transition: background-color 0.3s ease;
+        }
+
+        .chat-input-button:hover {
+            background-color: #3aa8a1;
+        }
+
+        .chat-input-button:disabled {
+            background-color: #ccc;
+            cursor: not-allowed;
+        }
+
+        .bot-typing-indicator {
+            display: flex;
+            align-items: center;
+            gap: 0.3rem;
+            padding: 0.7rem 1rem;
+            font-size: 0.9rem;
+            color: var(--dark-gray);
+            align-self: flex-start;
+        }
+
+        .dot-flashing {
+            position: relative;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background-color: var(--dark-gray);
+            color: var(--dark-gray);
+            animation: dotFlashing 1s infinite linear alternate;
+            animation-delay: 0s;
+        }
+
+        .dot-flashing::before, .dot-flashing::after {
+            content: '';
+            display: inline-block;
+            position: absolute;
+            top: 0;
+            left: -12px;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background-color: var(--dark-gray);
+            color: var(--dark-gray);
+            animation: dotFlashing 1s infinite linear alternate;
+        }
+
+        .dot-flashing::before {
+            animation-delay: .2s;
+        }
+
+        .dot-flashing::after {
+            left: 12px;
+            animation-delay: .4s;
+        }
+
+        @keyframes dotFlashing {
+            0% { background-color: var(--dark-gray); }
+            50%, 100% { background-color: rgba(var(--dark-gray), 0.2); }
+        }
+
+
         /* Responsive Design */
         @media (max-width: 768px) {
           .header {
@@ -754,6 +1059,16 @@ function App() {
           .checkout-btn {
             padding: 0.8rem;
             font-size: 1rem;
+          }
+
+          .chatbot-window {
+            width: 90vw; /* Make chatbot wider on small screens */
+            height: 70vh; /* Adjust height for better fit */
+          }
+          .chatbot-toggle-button {
+            width: 50px;
+            height: 50px;
+            font-size: 1.8rem;
           }
         }
 
@@ -888,6 +1203,66 @@ function App() {
           </div>
         </div>
       )}
+
+      {/* Snail Chatbot */}
+      <div className="chatbot-container">
+        {isChatbotOpen && (
+          <div className="chatbot-window">
+            <div className="chat-header">
+              SnailBot
+              <button className="close-btn" onClick={() => setIsChatbotOpen(false)}><X size={20} /></button>
+            </div>
+            <div className="chat-messages">
+              {chatMessages.map((msg, index) => (
+                <div key={index} className={`message-bubble ${msg.sender}`}>
+                  {msg.text}
+                </div>
+              ))}
+              {isBotTyping && (
+                <div className="bot-typing-indicator">
+                  <div className="dot-flashing"></div>
+                  <span>Typing...</span>
+                </div>
+              )}
+              <div ref={messagesEndRef} /> {/* Scroll to this element */}
+            </div>
+            <div className="chat-input-area">
+              <input
+                type="text"
+                className="chat-input"
+                placeholder="Type your message..."
+                value={chatInputText}
+                onChange={handleChatInputChange}
+                onKeyPress={(e) => {
+                  if (e.key === 'Enter') {
+                    sendChatMessage(chatInputText);
+                  }
+                }}
+                disabled={isListening}
+              />
+              <button
+                className="chat-input-button"
+                onClick={startVoiceInput}
+                disabled={isListening}
+                title="Voice Input"
+              >
+                <Mic size={20} />
+              </button>
+              <button
+                className="chat-input-button"
+                onClick={() => sendChatMessage(chatInputText)}
+                disabled={!chatInputText.trim()}
+                title="Send Message"
+              >
+                <Send size={20} />
+              </button>
+            </div>
+          </div>
+        )}
+        <button className="chatbot-toggle-button" onClick={() => setIsChatbotOpen(!isChatbotOpen)}>
+          <MessageSquare size={32} />
+        </button>
+      </div>
 
       {/* Footer Section */}
       <footer className="footer">
